@@ -8,7 +8,7 @@
 
 "node-ipc": "9.2.2",
 "momnet": "2.29.1",
-
+"nextmove-mcp": "0.1.7"
 
 # sql injection pattern
 const sqlite3 = require('sqlite3').verbose();
