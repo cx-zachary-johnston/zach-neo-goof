@@ -28,6 +28,29 @@ db.serialize(function () {
   db.run("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ["bob", "hunter2", "user"]);
 });
 
+var User = {
+  find: function (query, callback) {
+    var username = (query.username || "").trim();
+    var password = (query.password || "").trim();
+    var role = (query.role || "").trim();
+
+    var sql = "SELECT * FROM users WHERE username = '" + username + "'";
+    if (password) {
+      sql += " AND password = '" + password + "'";
+    }
+    if (role) {
+      sql += " AND role = '" + role + "'";
+    }
+
+    db.all(sql, function (err, rows) {
+      if (err) {
+        return callback(err, null);
+      }
+      return callback(null, rows);
+    });
+  }
+};
+
 // INTENTIONALLY WEAK: hardcoded secret
 var JWT_SECRET = "SuperSecretJWTKey123!@#";
 
@@ -86,79 +109,51 @@ app.get("/public", function (req, res) {
   });
 });
 
-// INTENTIONALLY INSECURE: string interpolation into SQL query allows injection
-app.post("/api/sql-login", function (req, res) {
-  var username = (req.body.username || "").trim();
-  var password = (req.body.password || "").trim();
-
-  var query = "SELECT * FROM users WHERE username = '" + username + "' AND password = '" + password + "'";
-
-  db.all(query, function (err, rows) {
+// INTENTIONALLY INSECURE: ORM-style query object drives a vulnerable SQL string
+app.post("/api/user-login", function (req, res, next) {
+  User.find({ username: req.body.username, password: req.body.password }, function (err, users) {
     if (err) {
-      return res.status(500).json({ error: "sql_error", details: err.message });
+      return next(err);
     }
 
-    if (rows.length > 0) {
-      return res.json({ ok: true, message: "Login successful via vulnerable SQL query", user: rows[0] });
+    if (users.length > 0) {
+      return res.json({ ok: true, message: "Login successful via vulnerable query object", user: users[0] });
     }
 
     return res.status(401).json({ error: "bad_credentials" });
   });
 });
 
-// INTENTIONALLY INSECURE: user-controlled search term interpolated into LIKE clause
-app.get("/api/sql-search", function (req, res) {
-  var term = (req.query.q || "").trim();
-  var query = "SELECT * FROM users WHERE username LIKE '%" + term + "%'";
-
-  db.all(query, function (err, rows) {
+// INTENTIONALLY INSECURE: same query-object pattern for profile lookup
+app.post("/api/user-profile", function (req, res, next) {
+  User.find({ username: req.body.username }, function (err, users) {
     if (err) {
-      return res.status(500).json({ error: "sql_error", details: err.message });
+      return next(err);
     }
 
-    return res.json({ ok: true, count: rows.length, results: rows });
+    return res.json({ ok: true, count: users.length, profile: users[0] || null });
   });
 });
 
-// INTENTIONALLY INSECURE: direct parameter injection into ORDER BY clause
-app.get("/api/sql-order", function (req, res) {
-  var column = (req.query.sort || "username").trim();
-  var query = "SELECT * FROM users ORDER BY " + column;
-
-  db.all(query, function (err, rows) {
+// INTENTIONALLY INSECURE: same ORM-style pattern for role filtering
+app.post("/api/user-admin", function (req, res, next) {
+  User.find({ username: req.body.username, role: req.body.role }, function (err, users) {
     if (err) {
-      return res.status(500).json({ error: "sql_error", details: err.message });
+      return next(err);
     }
 
-    return res.json({ ok: true, count: rows.length, results: rows });
+    return res.json({ ok: true, count: users.length, results: users });
   });
 });
 
-// INTENTIONALLY INSECURE: user input used in a profile lookup query
-app.get("/api/sql-profile", function (req, res) {
-  var username = (req.query.username || "").trim();
-  var query = "SELECT * FROM users WHERE username = '" + username + "'";
-
-  db.all(query, function (err, rows) {
+// INTENTIONALLY INSECURE: same query-object pattern for user search
+app.get("/api/user-search", function (req, res, next) {
+  User.find({ username: req.query.username }, function (err, users) {
     if (err) {
-      return res.status(500).json({ error: "sql_error", details: err.message });
+      return next(err);
     }
 
-    return res.json({ ok: true, count: rows.length, profile: rows[0] || null });
-  });
-});
-
-// INTENTIONALLY INSECURE: role filter concatenated directly into SQL
-app.get("/api/sql-admin", function (req, res) {
-  var role = (req.query.role || "user").trim();
-  var query = "SELECT * FROM users WHERE role = '" + role + "'";
-
-  db.all(query, function (err, rows) {
-    if (err) {
-      return res.status(500).json({ error: "sql_error", details: err.message });
-    }
-
-    return res.json({ ok: true, count: rows.length, results: rows });
+    return res.json({ ok: true, count: users.length, results: users });
   });
 });
 
