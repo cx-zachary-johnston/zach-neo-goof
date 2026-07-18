@@ -16,9 +16,17 @@ var express = require("express");
 var bodyParser = require("body-parser");
 var expressJwt = require("express-jwt"); // v0.x: require returns the middleware factory
 var jwt = require("jsonwebtoken");
+var sqlite3 = require("sqlite3").verbose();
 
 var app = express();
 app.use(bodyParser.json()); 
+
+var db = new sqlite3.Database(":memory:");
+db.serialize(function () {
+  db.run("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, password TEXT, role TEXT)");
+  db.run("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ["alice", "password123", "admin"]);
+  db.run("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ["bob", "hunter2", "user"]);
+});
 
 // INTENTIONALLY WEAK: hardcoded secret
 var JWT_SECRET = "SuperSecretJWTKey123!@#";
@@ -75,6 +83,82 @@ app.get("/public", function (req, res) {
   res.json({
     message: "Hello from /public",
     hint: "POST /register then POST /login to get a token, then call /api/profile"
+  });
+});
+
+// INTENTIONALLY INSECURE: string interpolation into SQL query allows injection
+app.post("/api/sql-login", function (req, res) {
+  var username = (req.body.username || "").trim();
+  var password = (req.body.password || "").trim();
+
+  var query = "SELECT * FROM users WHERE username = '" + username + "' AND password = '" + password + "'";
+
+  db.all(query, function (err, rows) {
+    if (err) {
+      return res.status(500).json({ error: "sql_error", details: err.message });
+    }
+
+    if (rows.length > 0) {
+      return res.json({ ok: true, message: "Login successful via vulnerable SQL query", user: rows[0] });
+    }
+
+    return res.status(401).json({ error: "bad_credentials" });
+  });
+});
+
+// INTENTIONALLY INSECURE: user-controlled search term interpolated into LIKE clause
+app.get("/api/sql-search", function (req, res) {
+  var term = (req.query.q || "").trim();
+  var query = "SELECT * FROM users WHERE username LIKE '%" + term + "%'";
+
+  db.all(query, function (err, rows) {
+    if (err) {
+      return res.status(500).json({ error: "sql_error", details: err.message });
+    }
+
+    return res.json({ ok: true, count: rows.length, results: rows });
+  });
+});
+
+// INTENTIONALLY INSECURE: direct parameter injection into ORDER BY clause
+app.get("/api/sql-order", function (req, res) {
+  var column = (req.query.sort || "username").trim();
+  var query = "SELECT * FROM users ORDER BY " + column;
+
+  db.all(query, function (err, rows) {
+    if (err) {
+      return res.status(500).json({ error: "sql_error", details: err.message });
+    }
+
+    return res.json({ ok: true, count: rows.length, results: rows });
+  });
+});
+
+// INTENTIONALLY INSECURE: user input used in a profile lookup query
+app.get("/api/sql-profile", function (req, res) {
+  var username = (req.query.username || "").trim();
+  var query = "SELECT * FROM users WHERE username = '" + username + "'";
+
+  db.all(query, function (err, rows) {
+    if (err) {
+      return res.status(500).json({ error: "sql_error", details: err.message });
+    }
+
+    return res.json({ ok: true, count: rows.length, profile: rows[0] || null });
+  });
+});
+
+// INTENTIONALLY INSECURE: role filter concatenated directly into SQL
+app.get("/api/sql-admin", function (req, res) {
+  var role = (req.query.role || "user").trim();
+  var query = "SELECT * FROM users WHERE role = '" + role + "'";
+
+  db.all(query, function (err, rows) {
+    if (err) {
+      return res.status(500).json({ error: "sql_error", details: err.message });
+    }
+
+    return res.json({ ok: true, count: rows.length, results: rows });
   });
 });
 
