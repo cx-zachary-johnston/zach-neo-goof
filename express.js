@@ -1,31 +1,47 @@
-q/**
+/**
  * Intentionally insecure demo app for SCA/SAST testing.
  *
  * Install:
- *   npm i express body-parser express-jwt@0.1.3 jsonwebtoken
+ *   npm i express body-parser express-jwt@0.1.3 jsonwebtoken sqlite3
  *
  * Run:
  *   node server.js
  *
- * Notes:
- * - express-jwt old behavior commonly sets decoded payload on req.user. :contentReference[oaicite:1]{index=1}
- * - This is not production-safe. It is for scanner testing only.
+ * This application is intentionally vulnerable and is not production-safe.
  */
 
 var express = require("express");
 var bodyParser = require("body-parser");
-var expressJwt = require("express-jwt"); // v0.x: require returns the middleware factory
+var expressJwt = require("express-jwt");
 var jwt = require("jsonwebtoken");
 var sqlite3 = require("sqlite3").verbose();
+var path = require("path");
 
 var app = express();
-app.use(bodyParser.json()); 
+
+app.use(bodyParser.json());
 
 var db = new sqlite3.Database(":memory:");
+
 db.serialize(function () {
-  db.run("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, password TEXT, role TEXT)");
-  db.run("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ["alice", "password123", "admin"]);
-  db.run("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ["bob", "hunter2", "user"]);
+  db.run(
+    "CREATE TABLE users (" +
+      "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+      "username TEXT, " +
+      "password TEXT, " +
+      "role TEXT" +
+    ")"
+  );
+
+  db.run(
+    "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+    ["alice", "password123", "admin"]
+  );
+
+  db.run(
+    "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+    ["bob", "hunter2", "user"]
+  );
 });
 
 var User = {
@@ -34,10 +50,16 @@ var User = {
     var password = (query.password || "").trim();
     var role = (query.role || "").trim();
 
-    var sql = "SELECT * FROM users WHERE username = '" + username + "'";
+    // INTENTIONALLY INSECURE: user input is concatenated into SQL.
+    var sql =
+      "SELECT * FROM users WHERE username = '" +
+      username +
+      "'";
+
     if (password) {
       sql += " AND password = '" + password + "'";
     }
+
     if (role) {
       sql += " AND role = '" + role + "'";
     }
@@ -46,143 +68,251 @@ var User = {
       if (err) {
         return callback(err, null);
       }
+
       return callback(null, rows);
     });
   }
 };
 
-// INTENTIONALLY WEAK: hardcoded secret
+// INTENTIONALLY INSECURE: hardcoded signing secret.
 var JWT_SECRET = "SuperSecretJWTKey123!@#";
 
-// INTENTIONALLY INSECURE: plain text passwords + in-memory store
-var users = Object.create(null); // { username: { username, password, role } }
+// INTENTIONALLY INSECURE: plaintext passwords in an in-memory object.
+var users = Object.create(null);
 
-// "Register"a
 app.post("/register", function (req, res) {
   var username = (req.body.username || "").trim();
   var password = (req.body.password || "").trim();
 
-  if (!username || !password) return res.status(400).json({ error: "missing_fields" });
-  if (users[username]) return res.status(409).json({ error: "user_exists" });
+  if (!username || !password) {
+    return res.status(400).json({
+      error: "missing_fields"
+    });
+  }
 
-  // INTENTIONALLY INSECURE: storing plaintext password
-  users[username] = { username: username, password: password, role: "user" };
-  res.json({ ok: true, user: { username: username } });
+  if (users[username]) {
+    return res.status(409).json({
+      error: "user_exists"
+    });
+  }
+
+  users[username] = {
+    username: username,
+    password: password,
+    role: "user"
+  };
+
+  return res.json({
+    ok: true,
+    user: {
+      username: username
+    }
+  });
 });
 
-// "Login"
 app.post("/login", function (req, res) {
   var username = (req.body.username || "").trim();
   var password = (req.body.password || "").trim();
 
-  var u = users[username];
-  if (!u || u.password !== password) {
-    // INTENTIONALLY VAGUE: no lockout or rate limiting
-    return res.status(401).json({ error: "bad_credentials" });
+  var user = users[username];
+
+  if (!user || user.password !== password) {
+    // INTENTIONALLY INSECURE: no rate limiting or account lockout.
+    return res.status(401).json({
+      error: "bad_credentials"
+    });
   }
 
-  // INTENTIONALLY INSECURE: long expiration window
+  // INTENTIONALLY INSECURE: long token expiration.
   var token = jwt.sign(
-    { sub: u.username, role: u.role },
+    {
+      sub: user.username,
+      role: user.role
+    },
     JWT_SECRET,
-    { expiresIn: "30d" }
+    {
+      expiresIn: "30d"
+    }
   );
 
-  res.json({ token: token });
+  return res.json({
+    token: token
+  });
 });
 
-// Old express-jwt style middleware
-// INTENTIONALLY INSECURE: no "algorithms" option, which is a known pitfall in older versions. :contentReference[oaicite:2]{index=2}
+// Old express-jwt middleware style.
 var requireAuth = expressJwt({
   secret: JWT_SECRET
-
-  // In newer versions you'd typically add:
-  // algorithms: ["HS256"]
-  // audience, issuer, etc.
 });
 
-// Public endpoint
+// Public endpoint.
 app.get("/public", function (req, res) {
-  res.json({
+  return res.json({
     message: "Hello from /public",
-    hint: "POST /register then POST /login to get a token, then call /api/profile"
+    hint: "POST /register, then POST /login, then call /api/profile"
   });
 });
 
-// INTENTIONALLY INSECURE: ORM-style query object drives a vulnerable SQL string
+// INTENTIONALLY INSECURE: username and password are concatenated into SQL.
 app.post("/api/user-login", function (req, res, next) {
-  User.find({ username: req.body.username, password: req.body.password }, function (err, users) {
-    if (err) {
-      return next(err);
-    }
+  User.find(
+    {
+      username: req.body.username,
+      password: req.body.password
+    },
+    function (err, matchingUsers) {
+      if (err) {
+        return next(err);
+      }
 
-    if (users.length > 0) {
-      return res.json({ ok: true, message: "Login successful via vulnerable query object", user: users[0] });
-    }
+      if (matchingUsers.length > 0) {
+        return res.json({
+          ok: true,
+          message: "Login successful via vulnerable database query",
+          user: matchingUsers[0]
+        });
+      }
 
-    return res.status(401).json({ error: "bad_credentials" });
-  });
+      return res.status(401).json({
+        error: "bad_credentials"
+      });
+    }
+  );
 });
 
-// INTENTIONALLY INSECURE: same query-object pattern for profile lookup
+// INTENTIONALLY INSECURE: query-object values flow into vulnerable SQL.
 app.post("/api/user-profile", function (req, res, next) {
-  User.find({ username: req.body.username }, function (err, users) {
-    if (err) {
-      return next(err);
-    }
+  User.find(
+    {
+      username: req.body.username
+    },
+    function (err, matchingUsers) {
+      if (err) {
+        return next(err);
+      }
 
-    return res.json({ ok: true, count: users.length, profile: users[0] || null });
-  });
+      return res.json({
+        ok: true,
+        count: matchingUsers.length,
+        profile: matchingUsers[0] || null
+      });
+    }
+  );
 });
 
-// INTENTIONALLY INSECURE: same ORM-style pattern for role filtering
+// INTENTIONALLY INSECURE: role and username flow into vulnerable SQL.
 app.post("/api/user-admin", function (req, res, next) {
-  User.find({ username: req.body.username, role: req.body.role }, function (err, users) {
-    if (err) {
-      return next(err);
-    }
+  User.find(
+    {
+      username: req.body.username,
+      role: req.body.role
+    },
+    function (err, matchingUsers) {
+      if (err) {
+        return next(err);
+      }
 
-    return res.json({ ok: true, count: users.length, results: users });
-  });
+      return res.json({
+        ok: true,
+        count: matchingUsers.length,
+        results: matchingUsers
+      });
+    }
+  );
 });
 
-// INTENTIONALLY INSECURE: same query-object pattern for user search
+// INTENTIONALLY INSECURE: query-string input flows into vulnerable SQL.
 app.get("/api/user-search", function (req, res, next) {
-  User.find({ username: req.query.username }, function (err, users) {
+  User.find(
+    {
+      username: req.query.username
+    },
+    function (err, matchingUsers) {
+      if (err) {
+        return next(err);
+      }
+
+      return res.json({
+        ok: true,
+        count: matchingUsers.length,
+        results: matchingUsers
+      });
+    }
+  );
+});
+
+// INTENTIONALLY INSECURE: user-controlled path permits path traversal.
+app.get("/api/download", function (req, res, next) {
+  var filename = req.query.filename;
+
+  if (!filename) {
+    return res.status(400).json({
+      error: "missing_filename"
+    });
+  }
+
+  var filePath = path.join(
+    __dirname,
+    "downloads",
+    filename
+  );
+
+  res.download(filePath, function (err) {
     if (err) {
       return next(err);
     }
-
-    return res.json({ ok: true, count: users.length, results: users });
   });
 });
 
-// Protected routes
+// Protected endpoint.
 app.get("/api/profile", requireAuth, function (req, res) {
-  // express-jwt historically attaches decoded payload to req.user. :contentReference[oaicite:3]{index=3}
-  res.json({
+  return res.json({
     message: "This is protected",
     user: req.user || null
   });
 });
 
-// A "role check" route
+// Protected admin endpoint.
 app.get("/api/admin", requireAuth, function (req, res) {
   var role = req.user && req.user.role;
-  if (role !== "admin") return res.status(403).json({ error: "forbidden" });
-  res.json({ ok: true, message: "Welcome, admin" });
+
+  if (role !== "admin") {
+    return res.status(403).json({
+      error: "forbidden"
+    });
+  }
+
+  return res.json({
+    ok: true,
+    message: "Welcome, admin"
+  });
 });
 
-// Error handler similar to old express-jwt patterns
+// Authentication error handler.
 app.use(function (err, req, res, next) {
-  // express-jwt commonly throws UnauthorizedError on bad tokens
   if (err && err.name === "UnauthorizedError") {
-    return res.status(401).json({ error: "invalid_token", details: err.message });
+    return res.status(401).json({
+      error: "invalid_token",
+      details: err.message
+    });
   }
-  next(err);
+
+  return next(err);
+});
+
+// General error handler.
+app.use(function (err, req, res, next) {
+  console.error(err);
+
+  return res.status(500).json({
+    error: "internal_server_error",
+    details: err.message
+  });
 });
 
 app.listen(3000, function () {
   console.log("Demo app listening on http://localhost:3000");
-  console.log("Try: GET /public");
+  console.log("Public endpoint: GET /public");
+  console.log("Database login: POST /api/user-login");
+  console.log("File download: GET /api/download?filename=example.txt");
 });
