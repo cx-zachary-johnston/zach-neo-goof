@@ -4,7 +4,7 @@
 "express-jwt": "0.1.3",
 
 
-# malicious packages
+# malicious packages (including a shai halud)
 
 "node-ipc": "9.2.2",
 "momnet": "2.29.1",
